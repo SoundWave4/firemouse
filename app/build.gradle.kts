@@ -6,8 +6,8 @@ android {
         applicationId = "dev.firemouse"
         minSdk = 30        // Fire OS 8 = Android 11 = API 30
         targetSdk = 30
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }

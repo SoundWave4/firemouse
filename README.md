@@ -20,6 +20,11 @@ FireMouse is adapted from MATVT and keeps its idea of an overlay cursor plus rem
 The arrow flashes green when a click or scroll landed and red when there was nothing there.
 While the mouse is on, the Menu button is used as the on/off key and doesn't reach apps.
 
+**YouTube fullscreen tip:** YouTube hides its player controls after about 3 seconds. Park the arrow where the
+fullscreen icon appears (bottom right of the video) and press OK twice: the first press shows the controls, the
+second hits the button. If the controls were already showing, the first press hides them, so just press again.
+Back leaves fullscreen.
+
 ## Install
 
 You need a PC with [adb](https://developer.android.com/tools/releases/platform-tools) and the Fire TV on the same network.

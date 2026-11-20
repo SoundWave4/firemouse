@@ -22,13 +22,20 @@ object NodeActions {
     enum class Dir { UP, DOWN, LEFT, RIGHT }
 
     fun click(s: AccessibilityService, x: Int, y: Int): Boolean {
-        val leaf = deepestAt(s, x, y) ?: return false.also { Log.i(TAG, "click ($x,$y): no node") }
-        var n: AccessibilityNodeInfo? = leaf
+        val hit = find(s, x, y) ?: return false.also { Log.i(TAG, "click ($x,$y): no node") }
+        val leaf = hit.leaf
+        // Best target: the smallest clickable element under the cursor. Climbing up from the
+        // smallest element instead can skip a button whose wrapper is a few pixels smaller
+        // (e.g. YouTube's fullscreen button) and click the background behind it.
+        hit.clickable?.let { c ->
+            val ok = c.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            Log.i(TAG, "click ($x,$y): ${describe(c)} -> $ok")
+            if (ok) return true
+        }
+        var n: AccessibilityNodeInfo? = leaf.parent
         while (n != null) {
-            if (n.isClickable || n.actionList.contains(AccessibilityAction.ACTION_CLICK)) {
-                val ok = n.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                Log.i(TAG, "click ($x,$y): ${describe(n)} -> $ok")
-                if (ok) return true
+            if (n.isClickable && n.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                Log.i(TAG, "click ($x,$y): ancestor ${describe(n)} -> true"); return true
             }
             n = n.parent
         }
@@ -50,7 +57,7 @@ object NodeActions {
 
     fun scroll(s: AccessibilityService, x: Int, y: Int, dir: Dir): Boolean {
         // 1) scrollable containers under the cursor, innermost first
-        var n: AccessibilityNodeInfo? = deepestAt(s, x, y, allowFull = false)
+        var n: AccessibilityNodeInfo? = find(s, x, y, allowFull = false)?.leaf
         while (n != null) {
             if (n.isScrollable && tryScroll(n, dir)) return true
             n = n.parent
@@ -108,8 +115,11 @@ object NodeActions {
         return s.rootInActiveWindow
     }
 
+    /** leaf = smallest visible element at the point; clickable = smallest clickable one. */
+    private class Hit(val leaf: AccessibilityNodeInfo, val clickable: AccessibilityNodeInfo?)
+
     /**
-     * Smallest visible node containing (x,y) in the topmost window there.
+     * What's under (x,y) in the topmost window there.
      *
      * Native views nest properly, so we skip any branch whose box misses the cursor (fast).
      * Chromium web content does not: a page element's box is often not inside its parent's
@@ -117,43 +127,57 @@ object NodeActions {
      * search the top few levels fully, then prune by box below that. If that only finds a big
      * container, we fall back to a full (slow, ~2 s) walk.
      */
-    private fun deepestAt(s: AccessibilityService, x: Int, y: Int, allowFull: Boolean = true): AccessibilityNodeInfo? {
+    private fun find(s: AccessibilityService, x: Int, y: Int, allowFull: Boolean = true): Hit? {
         val root = windowRootAt(s, x, y) ?: return null
         val t0 = System.currentTimeMillis()
         val screen = s.resources.displayMetrics.let { it.widthPixels.toLong() * it.heightPixels }
-        fun good(n: AccessibilityNodeInfo?) = n != null && (area(n) <= screen / 8 || !isInsideWeb(n))
+        fun good(r: SearchResult) = r.leaf != null && (r.leafArea <= screen / 8 || !isInsideWeb(r.leaf!!))
         // Pass 1: strict pruning. Pass 2: tolerate up to 2 levels of boxes that miss the cursor
         // (CSS floats/overflow). Pass 3 (clicks only): everything.
-        var visited = 0
         var mode = "strict"
-        var (best, v1) = search(root, x, y, missBudget = 0); visited += v1
-        if (!good(best)) {
-            val (b2, v2) = search(root, x, y, missBudget = 2); visited += v2; mode = "tolerant"
-            if (b2 != null && (best == null || area(b2) < area(best!!))) best = b2
+        var res = search(root, x, y, missBudget = 0)
+        var visited = res.visited
+        if (!good(res)) {
+            val r2 = search(root, x, y, missBudget = 2); visited += r2.visited; mode = "tolerant"
+            if (r2.leaf != null && r2.leafArea <= res.leafArea) res = r2
         }
-        if (allowFull && !good(best)) {
-            val (b3, v3) = search(root, x, y, missBudget = Int.MAX_VALUE); visited += v3; mode = "full"
-            if (b3 != null) best = b3
+        if (allowFull && !good(res)) {
+            val r3 = search(root, x, y, missBudget = Int.MAX_VALUE); visited += r3.visited; mode = "full"
+            if (r3.leaf != null) res = r3
         }
-        Log.i(TAG, "search ($x,$y) $mode: $visited nodes in ${System.currentTimeMillis() - t0}ms -> ${best?.let { describe(it) }}")
-        return best
+        Log.i(TAG, "search ($x,$y) $mode: $visited nodes in ${System.currentTimeMillis() - t0}ms -> " +
+            "${res.leaf?.let { describe(it) }} / clickable ${res.clickable?.let { describe(it) }}@${res.clickDepth}")
+        return res.leaf?.let { Hit(it, res.clickable) }
+    }
+
+    private class SearchResult {
+        var leaf: AccessibilityNodeInfo? = null; var leafArea = Long.MAX_VALUE; var leafDepth = -1
+        var clickable: AccessibilityNodeInfo? = null; var clickArea = Long.MAX_VALUE; var clickDepth = Int.MAX_VALUE
+        var visited = 0
     }
 
     /** missBudget: how many levels in a row we may follow boxes that don't contain the cursor. */
-    private fun search(root: AccessibilityNodeInfo, x: Int, y: Int, missBudget: Int): Pair<AccessibilityNodeInfo?, Int> {
-        var best: AccessibilityNodeInfo? = null
-        var bestArea = Long.MAX_VALUE
-        var visited = 0
+    private fun search(root: AccessibilityNodeInfo, x: Int, y: Int, missBudget: Int): SearchResult {
+        val res = SearchResult()
         val r = Rect()
         // webDepth: -1 outside web content, else levels below the WebView node.
         fun walk(n: AccessibilityNodeInfo?, depth: Int, webDepth: Int, misses: Int) {
-            if (n == null || depth > 80 || visited > MAX_NODES) return
-            visited++
+            if (n == null || depth > 80 || res.visited > MAX_NODES) return
+            res.visited++
             n.getBoundsInScreen(r)
             val hit = !r.isEmpty && r.contains(x, y)
             if (hit && n.isVisibleToUser) {
                 val a = r.width().toLong() * r.height()
-                if (a <= bestArea) { best = n; bestArea = a }
+                // Smallest element; on equal size the deepest.
+                if (a < res.leafArea || (a == res.leafArea && depth >= res.leafDepth)) {
+                    res.leaf = n; res.leafArea = a; res.leafDepth = depth
+                }
+                // Smallest clickable; on equal size the outermost. Stacked same-size layers
+                // (like a video player's) are handled by the outer one - on YouTube that's the
+                // layer that shows the controls, like a real tap.
+                if (n.isClickable && (a < res.clickArea || (a == res.clickArea && depth < res.clickDepth))) {
+                    res.clickable = n; res.clickArea = a; res.clickDepth = depth
+                }
             }
             val wd = if (webDepth >= 0) webDepth + 1 else if (isWebView(n)) 0 else -1
             val m = if (hit) 0 else misses + 1
@@ -161,7 +185,7 @@ object NodeActions {
             if (descend) for (i in 0 until n.childCount) walk(n.getChild(i), depth + 1, wd, m)
         }
         walk(root, 0, -1, 0)
-        return best to visited
+        return res
     }
 
     private fun isWebView(n: AccessibilityNodeInfo) = n.className?.contains("WebView") == true
