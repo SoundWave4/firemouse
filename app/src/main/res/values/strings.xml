@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">FireMouse</string>
+    <string name="service_description">Remote-controlled mouse cursor. Press Menu to toggle.</string>
+</resources>

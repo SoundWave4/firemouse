@@ -1,0 +1,10 @@
+<!-- typeAllMask: needed so Android refreshes its cached element positions after scrolls/changes.
+     canRequestFilterKeyEvents: lets us see remote keys. canRetrieveWindowContent: lets us find what's under the cursor. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRequestFilterKeyEvents|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
+    android:canRequestFilterKeyEvents="true"
+    android:canRetrieveWindowContent="true"
+    android:notificationTimeout="100"
+    android:description="@string/service_description" />
